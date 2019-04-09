@@ -303,7 +303,7 @@ void set_motor_power(int8_t power_level, enum motor m) {
             power_level = power_level*-1;
         }
         else {
-            P1-> OUT & ~m;
+            P1->OUT &= ~m;
         }
 
         if (power_level > 100) {
@@ -409,7 +409,7 @@ uint8_t Bump_Read(void){
 }
 
 void follow_line(int16_t distance_from_line){
-    unsigned int base_power = 50;
+    unsigned int base_power = 30;
     int right_motor_power;
     int left_motor_power;
 
@@ -496,10 +496,15 @@ void HandleCollision(uint8_t bumpSensor){
    CollisionFlag = 1;
 }
 
-int main(void){  // test of interrupt-driven bump interface
+enum STATE {STRAIGHT, TURN};
+#define RANGE 40
 
+int main(void){  // test of interrupt-driven bump interface
+  enum STATE state = STRAIGHT;
   uint8_t line_follower_data;
   int16_t distance_from_line;
+  uint8_t line_cross = 0;
+  uint8_t last_status = 0;
   Clock_Init48MHz();   // 48 MHz clock; 12 MHz Timer A clock
   CollisionFlag = 0;
 
@@ -528,14 +533,40 @@ int main(void){  // test of interrupt-driven bump interface
 
   while(1){
       line_follower_data = line_follower_read();
+      distance_from_line = get_distance_from_line(line_follower_data);
+      if (state == STRAIGHT) {
+          if ((line_follower_data & 0x0F) == 0x0F) {
+              set_right_motor_power(-15);
+              set_left_motor_power(30);
 
-      if (line_follower_data) {
-          distance_from_line = get_distance_from_line(line_follower_data);
-          follow_line(distance_from_line);
+              state = TURN;
+          }
+          else if ((line_follower_data & 0xF0) == 0xF0) {
+              set_right_motor_power(30);
+              set_left_motor_power(-15);
+
+              state = TURN;
+          }
+          else if (line_follower_data) {
+              follow_line(distance_from_line);
+          }
+          else {
+              set_right_motor_power(0);
+              set_left_motor_power(0);
+          }
       }
-      else {
-          set_right_motor_power(0);
-          set_left_motor_power(0);
+      else if (state == TURN) {
+          if (line_cross < 2) {
+              line_cross += ((line_follower_data & BIT2) >> 2) ^ last_status;
+              last_status = (line_follower_data & BIT2) >> 2;
+          }
+          else {
+              line_cross = 0;
+              last_status = 0;
+              set_right_motor_power(0);
+              set_left_motor_power(0);
+              state = STRAIGHT;
+          }
       }
   }
 }
