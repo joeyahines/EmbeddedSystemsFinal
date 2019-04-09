@@ -63,9 +63,10 @@ void Clock_Delay1ms(uint32_t n) {
  ***************************************/
 void SysTick_Init(void){
   SysTick->CTRL = 0;
-  SysTick->LOAD = 0x00FFFFFF;           // maximum reload value
+  SysTick->LOAD = 48000;           // maximum reload value
   SysTick->VAL = 0;
-  SysTick->CTRL = 0x00000005;           // enable SysTick with no interrupts
+  SysTick->CTRL = 0x00000007;           // enable SysTick with no interrupts
+  SCB->SHP[11] = 4 << 5;
 
 }
 
@@ -445,8 +446,19 @@ int16_t get_distance_from_line(uint8_t line_value) {
     return sum/divisor;
 }
 
-uint8_t line_follower_read(void) {
-    uint8_t result;
+
+uint8_t count = 0;
+uint8_t line_sensor_raw = 0;
+void SysTick_Handler(void) {
+    if (count == 0) {
+        line_sensor_begin_read();
+    }
+    else if (count == 7) {
+        line_sensor_raw = line_sensor_end_read();
+    }
+}
+
+void line_sensor_begin_read() {
     //Turn on IR LEDS
     P5->OUT |= BIT3;
 
@@ -457,23 +469,13 @@ uint8_t line_follower_read(void) {
     //Wait 10us
     Clock_Delay1us(10);
     //SysTick_Delay1us(15);
+}
 
-    //Make P7 input
-    P7->DIR = 0x00;
-
-    //Allow RC circuit to decay
-    //SysTick_Delay1us(1400);
-    Clock_Delay1us(2000);
-
-    //read data
-    result = P7->IN;
+uint8_t line_sensor_end_read() {
+    uint8_t result = P7->IN;
 
     //Turn off IR LED
     P5->OUT &= ~BIT3;
-
-    //wait for everything to turn off
-    //SysTick_Delay1us(15);
-    Clock_Delay1us(10);
     return result;
 }
 
@@ -531,17 +533,26 @@ int main(void){  // test of interrupt-driven bump interface
   //set_right_motor_power(50);
   //set_left_motor_power(50);
 
+  /*
+   * Wait until turn is detected
+   * drive forward slightly (until center of wheels is over line)
+   *    + better idea, drive forward until turn line is no longer detected by sensor
+   * execute turn until line is detected again
+   * drive forward
+   */
+
   while(1){
-      line_follower_data = line_follower_read();
-      distance_from_line = get_distance_from_line(line_follower_data);
+      distance_from_line = get_distance_from_line(line_sensor_raw);
       if (state == STRAIGHT) {
           if ((line_follower_data & 0x0F) == 0x0F) {
+              SysTick_Wait10ms(50);
               set_right_motor_power(-15);
               set_left_motor_power(30);
 
               state = TURN;
           }
           else if ((line_follower_data & 0xF0) == 0xF0) {
+              SysTick_Wait10ms(50);
               set_right_motor_power(30);
               set_left_motor_power(-15);
 
