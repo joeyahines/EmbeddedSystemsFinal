@@ -63,9 +63,9 @@ void Clock_Delay1ms(uint32_t n) {
  ***************************************/
 void SysTick_Init(void){
   SysTick->CTRL = 0;
-  SysTick->LOAD = 48000;           // maximum reload value
+  SysTick->LOAD = 6000;           // maximum reload value
   SysTick->VAL = 0;
-  SysTick->CTRL = 0x00000007;           // enable SysTick with no interrupts
+  SysTick->CTRL = 0x00000007;           // enable SysTick with interrupts
   SCB->SHP[11] = 4 << 5;
 
 }
@@ -446,18 +446,6 @@ int16_t get_distance_from_line(uint8_t line_value) {
     return sum/divisor;
 }
 
-
-uint8_t count = 0;
-uint8_t line_sensor_raw = 0;
-void SysTick_Handler(void) {
-    if (count == 0) {
-        line_sensor_begin_read();
-    }
-    else if (count == 7) {
-        line_sensor_raw = line_sensor_end_read();
-    }
-}
-
 void line_sensor_begin_read() {
     //Turn on IR LEDS
     P5->OUT |= BIT3;
@@ -469,6 +457,7 @@ void line_sensor_begin_read() {
     //Wait 10us
     Clock_Delay1us(10);
     //SysTick_Delay1us(15);
+    P7->DIR = 0x00;
 }
 
 uint8_t line_sensor_end_read() {
@@ -479,6 +468,19 @@ uint8_t line_sensor_end_read() {
     return result;
 }
 
+uint8_t count = 1;
+volatile uint8_t line_sensor_raw = 0;
+void SysTick_Handler(void) {
+    if (count == 1) {
+        line_sensor_begin_read();
+    }
+    else if (count == 12) {
+        line_sensor_raw = line_sensor_end_read();
+        count = 0;
+    }
+
+    count++;
+}
 
 // we do not care about critical section/race conditions
 // triggered on touch, falling edge
@@ -498,12 +500,10 @@ void HandleCollision(uint8_t bumpSensor){
    CollisionFlag = 1;
 }
 
-enum STATE {STRAIGHT, TURN};
+enum STATE {STRAIGHT, LEFT_TURN, RIGHT_TURN, DONE};
 #define RANGE 40
-
+enum STATE state = STRAIGHT;
 int main(void){  // test of interrupt-driven bump interface
-  enum STATE state = STRAIGHT;
-  uint8_t line_follower_data;
   int16_t distance_from_line;
   uint8_t line_cross = 0;
   uint8_t last_status = 0;
@@ -530,35 +530,30 @@ int main(void){  // test of interrupt-driven bump interface
   P5->DS |= BIT3;
 
   Pause();
-  //set_right_motor_power(50);
-  //set_left_motor_power(50);
-
-  /*
-   * Wait until turn is detected
-   * drive forward slightly (until center of wheels is over line)
-   *    + better idea, drive forward until turn line is no longer detected by sensor
-   * execute turn until line is detected again
-   * drive forward
-   */
 
   while(1){
       distance_from_line = get_distance_from_line(line_sensor_raw);
       if (state == STRAIGHT) {
-          if ((line_follower_data & 0x0F) == 0x0F) {
-              SysTick_Wait10ms(50);
+          if ((line_sensor_raw & 0x03)) {
+              while((line_sensor_raw & 0x07) == 0x07) {
+              //moved forward
+              }
               set_right_motor_power(-15);
               set_left_motor_power(30);
 
-              state = TURN;
+              state = RIGHT_TURN;
           }
-          else if ((line_follower_data & 0xF0) == 0xF0) {
-              SysTick_Wait10ms(50);
+          else if (line_sensor_raw & 0xC0) {
+              while((line_sensor_raw & 0xC0) == 0xC0) {
+                  //moved forward
+              }
+
               set_right_motor_power(30);
               set_left_motor_power(-15);
 
-              state = TURN;
+              state = LEFT_TURN;
           }
-          else if (line_follower_data) {
+          else if (line_sensor_raw) {
               follow_line(distance_from_line);
           }
           else {
@@ -566,10 +561,10 @@ int main(void){  // test of interrupt-driven bump interface
               set_left_motor_power(0);
           }
       }
-      else if (state == TURN) {
+      else if (state == RIGHT_TURN) {
           if (line_cross < 2) {
-              line_cross += ((line_follower_data & BIT2) >> 2) ^ last_status;
-              last_status = (line_follower_data & BIT2) >> 2;
+              line_cross += ((line_sensor_raw & BIT2) >> 2) ^ last_status;
+              last_status = (line_sensor_raw & BIT2) >> 2;
           }
           else {
               line_cross = 0;
@@ -578,6 +573,23 @@ int main(void){  // test of interrupt-driven bump interface
               set_left_motor_power(0);
               state = STRAIGHT;
           }
+      }
+      else if (state == LEFT_TURN) {
+            if (line_cross < 2) {
+                line_cross += ((line_sensor_raw & BIT5) >> 5) ^ last_status;
+                last_status = (line_sensor_raw & BIT5) >> 5;
+            }
+            else {
+                line_cross = 0;
+                last_status = 0;
+                set_right_motor_power(0);
+                set_left_motor_power(0);
+                state = STRAIGHT;
+            }
+      }
+      else if (state == DONE) {
+          set_right_motor_power(0);
+          set_left_motor_power(0);
       }
   }
 }
