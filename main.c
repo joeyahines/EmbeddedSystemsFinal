@@ -444,17 +444,18 @@ uint8_t Bump_Read(void){
 
 void follow_line(int16_t distance_from_line){
     unsigned int base_power = 30;
+    int power;
     int right_motor_power;
     int left_motor_power;
-
+    power =  ((((uint16_t)distance_from_line << 2)/(uint16_t)332) * (base_power)) >> 2;
     if (distance_from_line < 0) {
         distance_from_line *= -1;
-        right_motor_power = base_power;
-        left_motor_power = ((((((uint16_t)distance_from_line << 2)/(uint16_t)332) * (base_power)) + (base_power << 2)) >> 2);
+        right_motor_power = base_power - power;
+        left_motor_power = base_power + power;
     }
     else {
-        right_motor_power = ((((((uint16_t)distance_from_line << 2)/(uint16_t)332) * (base_power)) + (base_power << 2)) >> 2);
-        left_motor_power = base_power;
+        right_motor_power = base_power + power;
+        left_motor_power = base_power - power;
     }
     left_motor_speed = left_motor_power;
     right_motor_speed = right_motor_power;
@@ -507,7 +508,7 @@ void SysTick_Handler(void) {
     if (count == 1) {
         line_sensor_begin_read();
     }
-    else if (count == 12) {
+    else if (count == 20) {
         line_sensor_raw = line_sensor_end_read();
         count = 0;
     }
@@ -565,12 +566,12 @@ int main(void){  // test of interrupt-driven bump interface
 
   while(1){
       distance_from_line = get_distance_from_line(line_sensor_raw);
-      if ((line_sensor_raw & 0xBD) == 0x99){
+      if (((line_sensor_raw & 0xBD) == 0x99)){
                     state = DONE;
       }
 
       if (state == STRAIGHT) {
-          if ((line_sensor_raw & 0x03)) {
+          if ((line_sensor_raw & 0x3)) {
               while(((line_sensor_raw & 0x03) == 0x03)) {
               //moved forward
               }
@@ -636,7 +637,7 @@ int main(void){  // test of interrupt-driven bump interface
               set_left_motor_power(-35);
           }
           else {
-
+              Clock_Delay1us(500);
               if (distance_from_line < 0) {
                   set_right_motor_power(15);
                   set_left_motor_power(-15);
@@ -666,6 +667,8 @@ int main(void){  // test of interrupt-driven bump interface
           LaunchPad_Output(3);
           set_right_motor_power(0);
           set_left_motor_power(0);
+
+          while(1); //bye forever
       }
   }
 }
