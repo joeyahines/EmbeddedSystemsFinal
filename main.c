@@ -9,7 +9,7 @@
 #include "msp.h"
 #include "CortexM.h"
 
-enum STATE {STRAIGHT, LEFT_TURN, RIGHT_TURN, FIND_RIGHT_TURN, FIND_LEFT_TURN, DONE, COLLISION};
+enum STATE {STRAIGHT, LEFT_TURN, RIGHT_TURN, FIND_RIGHT_TURN, FIND_LEFT_TURN, DONE, COLLISION, TURN_AROUND};
 #define RANGE 40
 enum STATE state = STRAIGHT;
 
@@ -565,7 +565,9 @@ int main(void){  // test of interrupt-driven bump interface
 
   while(1){
       distance_from_line = get_distance_from_line(line_sensor_raw);
-
+      if ((line_sensor_raw & 0xBD) == 0x99){
+                    state = DONE;
+      }
 
       if (state == STRAIGHT) {
           if ((line_sensor_raw & 0x03)) {
@@ -587,17 +589,19 @@ int main(void){  // test of interrupt-driven bump interface
 
               state = LEFT_TURN;
           }
-          /*
-          else if (line_sensor_raw == 0x11011011){
-              state = DONE;
-          }
-          */
           else if (line_sensor_raw) {
               follow_line(distance_from_line);
           }
           else {
-              set_right_motor_power(0);
-              set_left_motor_power(0);
+            if (distance_from_line < 0) {
+                set_right_motor_power(15);
+                set_left_motor_power(-15);
+            }
+            else {
+                set_right_motor_power(-15);
+                set_left_motor_power(15);
+            }
+            state = TURN_AROUND;
           }
       }
       else if (state == RIGHT_TURN) {
@@ -627,7 +631,6 @@ int main(void){  // test of interrupt-driven bump interface
             }
       }
       else if (state == COLLISION) {
-
           if (Bump_Read()) {
               set_right_motor_power(-35);
               set_left_motor_power(-35);
@@ -643,20 +646,21 @@ int main(void){  // test of interrupt-driven bump interface
                   set_left_motor_power(15);
               }
 
-              if (line_cross < 4 ) {
-                  line_cross += ((line_sensor_raw & BIT3) >> 3) ^ last_status;
-                  last_status = (line_sensor_raw & BIT3) >> 3;
-              }
-              else {
-                  line_cross = 0;
-                  last_status = 0;
-                  set_right_motor_power(35);
-                  set_left_motor_power(35);
-                  state = STRAIGHT;
-              }
+              state = TURN_AROUND;
           }
-
-
+      }
+      else if (state == TURN_AROUND) {
+            if (line_cross < 2 ) {
+                line_cross += ((line_sensor_raw & BIT3) >> 3) ^ last_status;
+                last_status = (line_sensor_raw & BIT3) >> 3;
+            }
+            else {
+                line_cross = 0;
+                last_status = 0;
+                set_right_motor_power(35);
+                set_left_motor_power(35);
+                state = STRAIGHT;
+            }
       }
       else if (state == DONE) {
           LaunchPad_Output(3);
