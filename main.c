@@ -9,7 +9,7 @@
 #include "msp.h"
 #include "CortexM.h"
 
-enum STATE {STRAIGHT, LEFT_TURN, RIGHT_TURN, FIND_RIGHT_TURN, FIND_LEFT_TURN, DONE, COLLISION, TURN_AROUND};
+enum STATE {STRAIGHT, LEFT_TURN, RIGHT_TURN, FIND_RIGHT_TURN, FIND_LEFT_TURN, DONE, COLLISION, TURN_AROUND, TURN};
 #define RANGE 40
 enum STATE state = STRAIGHT;
 
@@ -290,7 +290,7 @@ void PWM_init(uint16_t period, uint16_t duty1, uint16_t duty2) {
     PERIOD = period;
 }
 
-void STATUS_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2, uint16_t duty3) {
+void status_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2, uint16_t duty3) {
     P5->DIR |= BIT6 | BIT7;
     P6->DIR |= BIT6;
 
@@ -303,8 +303,6 @@ void STATUS_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2, uint16_t d
     TIMER_A2->CCTL[0] = 0x0080;
     TIMER_A2->CCR[0] = period;
 
-    TIMER_A2->EX0 = 0x0000;
-
     TIMER_A2->CCTL[1] = 0x0040;
     TIMER_A2->CCR[1] = duty1;
 
@@ -314,9 +312,16 @@ void STATUS_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2, uint16_t d
     TIMER_A2->CCTL[3] = 0x0040;
     TIMER_A2->CCR[3] = duty2;
 
-    TIMER_A2->CTL = 0x02F0;
+    TIMER_A2->CTL = 0x01F0;
+    TIMER_A2->EX0 = 0x0000;
 
     PERIOD = period;
+}
+
+void set_status_leds_duty(uint16_t duty1, uint16_t duty2, uint16_t duty3) {
+    TIMER_A2->CCR[1] = duty1;
+    TIMER_A2->CCR[2] = duty2;
+    TIMER_A2->CCR[3] = duty3;
 }
 
 void set_right_motor_power(int8_t power_level) {
@@ -447,6 +452,7 @@ void follow_line(int16_t distance_from_line){
     int power;
     int right_motor_power;
     int left_motor_power;
+
     power =  ((((uint16_t)distance_from_line << 2)/(uint16_t)332) * (base_power)) >> 2;
     if (distance_from_line < 0) {
         distance_from_line *= -1;
@@ -538,7 +544,8 @@ int main(void){  // test of interrupt-driven bump interface
   int16_t distance_from_line;
   uint8_t line_cross = 0;
   uint8_t last_status = 0;
-  uint8_t count = 0;
+  enum STATE last_turn = RIGHT_TURN;
+
   Clock_Init48MHz();   // 48 MHz clock; 12 MHz Timer A clock
   CollisionFlag = 0;
 
@@ -547,6 +554,7 @@ int main(void){  // test of interrupt-driven bump interface
   BumpInt_Init(*HandleCollision);
   LaunchPad_Init();
   PWM_init(8000, 0, 0);
+  //status_LED_init(2000, 0, 0, 0);
   EnableInterrupts();
 
   P7->SEL0 &= ~0xFF;
@@ -571,24 +579,8 @@ int main(void){  // test of interrupt-driven bump interface
       }
 
       if (state == STRAIGHT) {
-          if ((line_sensor_raw & 0x3)) {
-              while(((line_sensor_raw & 0x03) == 0x03)) {
-              //moved forward
-              }
-              set_right_motor_power(-15);
-              set_left_motor_power(30);
-
-              state = RIGHT_TURN;
-          }
-          else if (line_sensor_raw & 0xC0) {
-              while((line_sensor_raw & 0xC0) == 0xC0) {
-                  //moved forward
-              }
-
-              set_right_motor_power(30);
-              set_left_motor_power(-15);
-
-              state = LEFT_TURN;
+          if ((line_sensor_raw & 0x03) || (line_sensor_raw & 0xC0)) {
+              state = TURN;
           }
           else if (line_sensor_raw) {
               follow_line(distance_from_line);
@@ -605,20 +597,46 @@ int main(void){  // test of interrupt-driven bump interface
             state = TURN_AROUND;
           }
       }
-      else if (state == RIGHT_TURN) {
-          if (line_cross < 2) {
-              line_cross += ((line_sensor_raw & BIT2) >> 2) ^ last_status;
-              last_status = (line_sensor_raw & BIT2) >> 2;
+      else if (state == TURN) {
+          if ((line_sensor_raw & 0xC0) && (line_sensor_raw & 0x03)) {
+              state = last_turn;
+
+              while(line_sensor_raw) {}
+          }
+          else if (line_sensor_raw & 0xC0) {
+              state = LEFT_TURN;
+              while((line_sensor_raw & 0xC0) == 0xC0) {}
+              set_right_motor_power(30);
+              set_left_motor_power(-15);
+          }
+          else if ((line_sensor_raw & 0x03)) {
+              state = RIGHT_TURN;
+              while(((line_sensor_raw & 0x03) == 0x03)) {}
+              set_right_motor_power(-15);
+              set_left_motor_power(30);
           }
           else {
-              line_cross = 0;
-              last_status = 0;
-              set_right_motor_power(35);
-              set_left_motor_power(35);
-              state = STRAIGHT;
+              state = DONE;
           }
+
+          last_turn = state;
+      }
+      else if (state == RIGHT_TURN) {
+          set_status_leds_duty(0, 1000, 0);
+              if (line_cross < 2) {
+                  line_cross += ((line_sensor_raw & BIT3) >> 3) ^ last_status;
+                  last_status = (line_sensor_raw & BIT3) >> 3;
+              }
+              else {
+                  line_cross = 0;
+                  last_status = 0;
+                  set_right_motor_power(35);
+                  set_left_motor_power(35);
+                  state = STRAIGHT;
+              }
       }
       else if (state == LEFT_TURN) {
+            set_status_leds_duty(1000, 0, 0);
             if (line_cross < 2) {
                 line_cross += ((line_sensor_raw & BIT4) >> 4) ^ last_status;
                 last_status = (line_sensor_raw & BIT4) >> 4;
@@ -632,6 +650,7 @@ int main(void){  // test of interrupt-driven bump interface
             }
       }
       else if (state == COLLISION) {
+          set_status_leds_duty(0, 0, 1000);
           if (Bump_Read()) {
               set_right_motor_power(-35);
               set_left_motor_power(-35);
@@ -664,6 +683,7 @@ int main(void){  // test of interrupt-driven bump interface
             }
       }
       else if (state == DONE) {
+          set_status_leds_duty(1000, 1000, 1000);
           LaunchPad_Output(3);
           set_right_motor_power(0);
           set_left_motor_power(0);
