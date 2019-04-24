@@ -1,13 +1,13 @@
 /*
  * TODO
- * + Finish line follower code
- * + Add collision handler
- * + Add path finding logic (need to build the maze)
- * + Test and optimize
+ * Test collision
+ * Tweak treasure find code to be more reliable
+ * Test test test
  */
 
 #include "msp.h"
 #include "CortexM.h"
+#define BASE_POWER 30
 
 enum STATE
 {
@@ -30,8 +30,6 @@ enum motor
     Right = BIT6, Left = BIT7
 };
 
-int16_t right_motor_speed;
-int16_t left_motor_speed;
 
 //Line Data
 int16_t line_data;
@@ -430,44 +428,40 @@ void set_right_motor_duty(uint16_t duty)
     TIMER_A0->CCR[3] = duty;
 }
 
-//------------LaunchPad_Input------------
-// Input from Switches
-// Input: none
-// Output: 0x00 none
-//         0x01 Button1
-//         0x02 Button2
-//         0x03 both Button1 and Button2
+/**
+ * Reads the inputs from launchpad's buttons
+ */
 uint8_t LaunchPad_Input(void)
 {
     return ((((~(P1->IN)) & 0x10) >> 3) | (((~(P1->IN)) & 0x02) >> 1)); // read P1.4,P1.1 inputs
 }
 
-//------------LaunchPad_Output------------
-// Output to LaunchPad LEDs
-// Input: 0 off, bit0=red,bit1=green,bit2=blue
-// Output: none
+/**
+ * Sets the output of the RGB led
+ * BIT0 Red
+ * BIT1 Green
+ * BIT2 Blue
+ */
 void LaunchPad_Output(uint8_t data)
 {  // write three outputs bits of P2
     P2->OUT = (P2->OUT & 0xF8) | data;
 }
 
-// Driver test
+/**
+ * Waits for a button to be pressed
+ */
 void Pause(void)
 {
-    while (LaunchPad_Input() == 0)
-        ;  // wait for touch
-    while (LaunchPad_Input())
-        ;     // wait for release
+    while (LaunchPad_Input() == 0);  // wait for touch
+    while (LaunchPad_Input()); // wait for release
 }
 
-// Initialize Bump sensors
-// Make six Port 4 pins inputs
-// Activate interface pullup
-// pins 7,6,5,3,2,0
-// Interrupt on falling edge (on touch)
+/**
+ * Initializes P4 for the bump switches
+ */
 void BumpInt_Init(void (*task)(uint8_t))
 {
-    // write this as part of Lab 7
+    //Setup P4 pins
     P4->SEL0 &= ~0xED;
     P4->SEL1 &= ~0xED;
     P4->DIR &= ~0xED;
@@ -475,7 +469,8 @@ void BumpInt_Init(void (*task)(uint8_t))
     P4->OUT |= 0xED;
     bump_event = task;
 
-    P4->IES |= 0xED;
+    //Setup P4 Interrupts
+    P4->IES &= ~0xED;
     P4->IFG &= ~0xED;
     P4->IE |= 0xED;
 
@@ -483,15 +478,9 @@ void BumpInt_Init(void (*task)(uint8_t))
     NVIC->ISER[1] = 0x00000040;
 }
 
-// Read current state of 6 switches
-// Returns a 6-bit positive logic result (0 to 63)
-// bit 5 Bump5
-// bit 4 Bump4
-// bit 3 Bump3
-// bit 2 Bump2
-// bit 1 Bump1
-// bit 0 Bump0
-
+/**
+ * Reads the bump switch on the front of the robot
+ */
 uint8_t Bump_Read(void)
 {
     bump = P4->IN;
@@ -502,21 +491,40 @@ uint8_t Bump_Read(void)
     bump4 = (~(P4->IN) & 0x40) >> 2; //4
     bump5 = (~(P4->IN) & 0x80) >> 2; //5
 
-    return (bump0 | bump1 | bump2 | bump3 | bump4 | bump5); // replace this line
+    return (bump0 | bump1 | bump2 | bump3 | bump4 | bump5); //return the value of the bump switches
 }
 
+/**
+ * Takes corrective action to follow the line, based off the input distance
+ */
 void follow_line(int16_t distance_from_line)
 {
-    unsigned int base_power = 30;
+    //Base power of the motors
+    unsigned int base_power = BASE_POWER;
+    //Change in the base power
     int power;
+
+    //Power of each motor
     int right_motor_power;
     int left_motor_power;
 
+    int forward;
+
+    if (distance_from_line < 0) {
+        distance_from_line = distance_from_line * -1;
+        forward = 0;
+    }
+    else {
+        forward = 1;
+    }
+
+    //Find how much how power is needed based of the distance
     power = ((((uint16_t) distance_from_line << 2) / (uint16_t) 332)
             * (base_power)) >> 2;
-    if (distance_from_line < 0)
+
+    //Set the power based off which way needs to be corrected
+    if (!forward)
     {
-        distance_from_line *= -1;
         right_motor_power = base_power - power;
         left_motor_power = base_power + power;
     }
@@ -525,20 +533,25 @@ void follow_line(int16_t distance_from_line)
         right_motor_power = base_power + power;
         left_motor_power = base_power - power;
     }
-    left_motor_speed = left_motor_power;
-    right_motor_speed = right_motor_power;
+
+    //Set motor power
     set_right_motor_power(right_motor_power);
     set_left_motor_power(left_motor_power);
 }
 
+/**
+ * Gets the distance away from the line
+ */
 int16_t get_distance_from_line(uint8_t line_value)
 {
+    //Array holding the distance from each sensor from the mid point
     int16_t distances[] = { -332, -237, -142, -47, 47, 237, 332 };
     int16_t sum = 0;
     int16_t divisor = 0;
     uint8_t weight;
     uint8_t i;
 
+    //Find the average distance
     for (i = 0; i < 8; i++)
     {
         weight = ((line_value & (BIT0 << i)) >> i);
@@ -549,7 +562,11 @@ int16_t get_distance_from_line(uint8_t line_value)
     return sum / divisor;
 }
 
+/**
+ * Initialized the line follower
+ */
 void line_follower_init() {
+    //Setup line follower port
     P7->SEL0 &= ~0xFF;
     P7->SEL1 &= ~0xFF;
     P7->DIR &= ~0xFF;
@@ -557,6 +574,7 @@ void line_follower_init() {
     P7->REN &= ~0xFF;
     P7->OUT |= 0xFF;
 
+    //Setup IR led driver pin
     P5->SEL0 &= ~BIT3;
     P5->SEL1 &= ~BIT3;
     P5->DIR |= BIT3;
@@ -564,6 +582,9 @@ void line_follower_init() {
     P5->DS |= BIT3;
 }
 
+/**
+ * Begins the process of reading the line sensor
+ */
 void line_sensor_begin_read()
 {
     //Turn on IR LEDS
@@ -575,12 +596,17 @@ void line_sensor_begin_read()
 
     //Wait 10us
     Clock_Delay1us(10);
-    //SysTick_Delay1us(15);
+
+    //Set P7 as input
     P7->DIR = 0x00;
 }
 
+/**
+ * Finishes reading the line sensor
+ */
 uint8_t line_sensor_end_read()
 {
+    //Store the result
     uint8_t result = P7->IN;
 
     //Turn off IR LED
@@ -588,39 +614,49 @@ uint8_t line_sensor_end_read()
     return result;
 }
 
+/**
+ * Handles reading the line sensor
+ */
 uint8_t count = 1;
 volatile uint8_t line_sensor_raw = 0;
 void SysTick_Handler(void)
 {
+    //Begin reading the line sensor
     if (count == 1)
     {
         line_sensor_begin_read();
     }
-    else if (count == 25)
+    //Finish reading the line sensor
+    else if (count == 20)
     {
         line_sensor_raw = line_sensor_end_read();
+        //reset count
         count = 0;
     }
 
     count++;
 }
 
-// we do not care about critical section/race conditions
-// triggered on touch, falling edge
+/**
+ * Handles the bump event
+ */
 void PORT4_IRQHandler(void)
 {
     P4->IFG &= ~0xEF;
+    //Ensure bump switches have been fired
     uint8_t status = Bump_Read();
     if (status)
     {
+        //call bump event
         (*bump_event)(status);
     }
 }
 
-uint8_t CollisionData, CollisionFlag;  // mailbox
+/*
+ * Moves the state machine to the collision state
+ */
 void HandleCollision(uint8_t bumpSensor)
 {
-    CollisionData = bumpSensor;
     state = COLLISION;
 }
 
@@ -628,17 +664,19 @@ void HandleCollision(uint8_t bumpSensor)
 #define HALF_DUTY 8000
 
 int main(void)
-{  // test of interrupt-driven bump interface
+{
+    //Distance away from the line
     int16_t distance_from_line;
+
+    //Used to track turn status
     uint8_t line_cross = 0;
     uint8_t last_status = 0;
-    enum STATE last_turn = RIGHT_TURN;
-    enum STATE turn_stack[15];
-    uint8_t turn_stack_pointer = 0;
-    uint8_t turn_around_flag = 0;
 
-    Clock_Init48MHz();   // 48 MHz clock; 12 MHz Timer A clock
-    CollisionFlag = 0;
+    //Last turn taken
+    enum STATE last_turn = RIGHT_TURN;
+
+    //Initialize Everything!!
+    Clock_Init48MHz();
     line_follower_init();
     SysTick_Init();
     Motor_Init();
@@ -648,27 +686,38 @@ int main(void)
     status_LED_init(HALF_HERTZ_PERIOD, HALF_DUTY, HALF_DUTY, HALF_DUTY);
     EnableInterrupts();
 
+    //Wait for the user to begin
     Pause();
 
+    //Run for ever
     while (1)
     {
+        //Get distance from the line
         distance_from_line = get_distance_from_line(line_sensor_raw);
+
+        //If we found the treasure,
         if (((line_sensor_raw & 0xBD) == 0x99))
         {
             state = DONE;
         }
 
+        //Straight State
         if (state == STRAIGHT)
         {
+            //turn off the status LEDs
             set_status_leds_duty(0, 0, 0);
+
+            //if we find a turn, go to the turn state
             if ((line_sensor_raw & 0x03) || (line_sensor_raw & 0xC0))
             {
                 state = TURN;
             }
+            //If there is any line data, try and follow it
             else if (line_sensor_raw)
             {
                 follow_line(distance_from_line);
             }
+            //if no line data is found, turn around
             else
             {
                 if (distance_from_line < 0)
@@ -685,40 +734,45 @@ int main(void)
                 set_status_leds_duty(0, 0, HALF_DUTY);
             }
         }
+        //if we are in a turn state
         else if (state == TURN)
         {
+            //If we are at a t intersection, pick the last direction we took
             if ((line_sensor_raw & 0xE0) && (line_sensor_raw & 0x07))
             {
                 state = last_turn;
 
+                //move forward slightly
                 while (((line_sensor_raw & 0x03) == 0x3)
                         && ((line_sensor_raw & 0xC0) == 0xC0))
                 {
                 }
             }
+            //if we have a left turn
             else if (line_sensor_raw & 0xC0)
             {
                 state = LEFT_TURN;
+                //move forward slightly
                 while ((line_sensor_raw & 0xC0) == 0xC0)
                 {
                 }
             }
-            else if ((line_sensor_raw & 0x03))
+            //if we have a right turn
+            else
             {
                 state = RIGHT_TURN;
                 while (((line_sensor_raw & 0x03) == 0x03))
                 {
                 }
             }
-            else
-            {
-                state = DONE;
-            }
+            //update last turn with state
             last_turn = state;
 
         }
+        //if we are turning right
         else if (state == RIGHT_TURN)
         {
+            //Start spinning
             if (line_cross == 0)
             {
                 set_status_leds_duty(0, HALF_DUTY, 0);
@@ -726,6 +780,8 @@ int main(void)
                 set_left_motor_power(30);
 
             }
+
+            //if we have not crossed the line
             if (line_cross < 2)
             {
                 line_cross += ((line_sensor_raw & BIT2 ) >> 2) ^ last_status;
@@ -733,6 +789,7 @@ int main(void)
             }
             else
             {
+                //Reset and drive straight
                 line_cross = 0;
                 last_status = 0;
                 set_right_motor_power(35);
@@ -742,12 +799,14 @@ int main(void)
         }
         else if (state == LEFT_TURN)
         {
+            //Start spinning
             if (line_cross == 0)
             {
                 set_status_leds_duty(HALF_DUTY, 0, 0);
                 set_right_motor_power(30);
                 set_left_motor_power(-15);
             }
+            //if we have not crossed the line
             if (line_cross < 2)
             {
                 line_cross += ((line_sensor_raw & BIT4 ) >> 4) ^ last_status;
@@ -755,6 +814,7 @@ int main(void)
             }
             else
             {
+                //Reset and drive straight
                 line_cross = 0;
                 last_status = 0;
                 set_right_motor_power(35);
@@ -762,17 +822,22 @@ int main(void)
                 state = STRAIGHT;
             }
         }
+        //If we got a collision
         else if (state == COLLISION)
         {
-            set_status_leds_duty(0, 0, 25000);
+            //while are bump switches are still pressed, back up
             if (Bump_Read())
             {
                 set_right_motor_power(-35);
                 set_left_motor_power(-35);
             }
+            //When we have cleared the collision, turn around
             else
             {
+                //delay some time to make sure we are clear
                 Clock_Delay1us(500);
+
+                //Find best way to spin
                 if (distance_from_line < 0)
                 {
                     set_right_motor_power(15);
@@ -784,17 +849,23 @@ int main(void)
                     set_left_motor_power(15);
                 }
 
+                //go to turn around state
                 state = TURN_AROUND;
+
+                //turn on status leds
                 set_status_leds_duty(0, 0, HALF_DUTY);
             }
         }
+        //if we need to turn around
         else if (state == TURN_AROUND)
         {
+            //If we have not crossed the line twice
             if (line_cross < 2)
             {
                 line_cross += ((line_sensor_raw & BIT3 ) >> 3) ^ last_status;
                 last_status = (line_sensor_raw & BIT3 ) >> 3;
             }
+            //When we have cross the line, reset the state and go to straight
             else
             {
                 line_cross = 0;
@@ -802,14 +873,17 @@ int main(void)
                 set_right_motor_power(35);
                 set_left_motor_power(35);
                 state = STRAIGHT;
-                turn_around_flag = 1;
             }
         }
+        //if we found the treasure
         else if (state == DONE)
         {
+            //set the status LEDs
             status_LED_init(HALF_HERTZ_PERIOD / 2, HALF_DUTY / 2, HALF_DUTY / 2,
                             HALF_DUTY / 2);
             LaunchPad_Output(3);
+
+            //stop motors
             set_right_motor_power(0);
             set_left_motor_power(0);
 
