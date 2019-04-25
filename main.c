@@ -276,9 +276,10 @@ void Clock_Init48MHz(void)
 //  SubsystemFrequency = 12000000;
 }
 
-/*************************************
- *  Launchpad init
- ************************************/
+
+/*
+ * Initializes launchpad LEDs and buttons
+ */
 void LaunchPad_Init(void)
 {
     P1->SEL0 &= ~0x13;
@@ -294,6 +295,9 @@ void LaunchPad_Init(void)
     P2->OUT &= ~0x07;     //    all LEDs off
 }
 
+/*
+ * Initialized the motors
+ */
 void Motor_Init(void)
 {
     P1->SEL0 &= ~0xC0; //1.6, 1.7 as output
@@ -311,6 +315,9 @@ void Motor_Init(void)
 
 }
 
+/*
+ * Initializes TimerA0 to generate PWM and sets up output pins
+ */
 void PWM_init(uint16_t period, uint16_t duty1, uint16_t duty2)
 {
     P2->DIR |= BIT6 | BIT7;
@@ -333,6 +340,9 @@ void PWM_init(uint16_t period, uint16_t duty1, uint16_t duty2)
     PERIOD = period;
 }
 
+/**
+ * Initializes TimerA2 to do PWM for the status LEDs
+ */
 void status_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2,
                      uint16_t duty3)
 {
@@ -361,6 +371,9 @@ void status_LED_init(uint16_t period, uint16_t duty1, uint16_t duty2,
     TIMER_A2->EX0 = 0x0000;
 }
 
+/*
+ * sets the duty cycle of the status LEDs
+ */
 void set_status_leds_duty(uint16_t duty1, uint16_t duty2, uint16_t duty3)
 {
     TIMER_A2->CCR[1] = duty1;
@@ -368,22 +381,36 @@ void set_status_leds_duty(uint16_t duty1, uint16_t duty2, uint16_t duty3)
     TIMER_A2->CCR[3] = duty3;
 }
 
+/*
+ * Sets the power of the right motors
+ * power is between -100 and 100
+ */
 void set_right_motor_power(int8_t power_level)
 {
     set_motor_power(power_level, Right);
 }
 
+/*
+ * sets the power of the left motor
+ * power is between -100 and 100
+ */
 void set_left_motor_power(int8_t power_level)
 {
     set_motor_power(power_level, Left);
 }
 
+/*
+ * sets the power of the specified motors
+ * power is between -100 (reversed) and 100 (forward)
+ */
 void set_motor_power(int8_t power_level, enum motor m)
 {
     uint16_t duty;
 
+    //if the motor is not stopped
     if (power_level != 0)
     {
+        //inverse the motor if the speed is negative
         if (power_level < 0)
         {
             P1->OUT |= m;
@@ -394,20 +421,24 @@ void set_motor_power(int8_t power_level, enum motor m)
             P1->OUT &= ~m;
         }
 
+        //clip the power level to 100
         if (power_level > 100)
         {
             power_level = 100;
         }
 
+        //Determine the duty cycle based off the power level and the period
         duty = ((uint16_t) power_level * PERIOD) / 100;
         P3->OUT |= m;
     }
     else
     {
+        //set duty to 0 and turn off the motors
         duty = 0;
         P3->OUT &= ~m;
     }
 
+    //Set the appropriate motor's duty
     if (m == Right)
     {
         set_right_motor_duty(duty);
@@ -418,11 +449,17 @@ void set_motor_power(int8_t power_level, enum motor m)
     }
 }
 
+/**
+ * set's the left motor's duty
+ */
 void set_left_motor_duty(uint16_t duty)
 {
     TIMER_A0->CCR[4] = duty;
 }
 
+/**
+ * set's the right motor's duty
+ */
 void set_right_motor_duty(uint16_t duty)
 {
     TIMER_A0->CCR[3] = duty;
